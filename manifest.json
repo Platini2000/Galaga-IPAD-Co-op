@@ -2,7 +2,7 @@
 {
   "name": "Galaga",
   "short_name": "Galaga",
-  "start_url": "./index.html",
+  "start_url": "https://platini2000.github.io/Galaga-IPAD-Co-op/index.html",
   "display": "standalone",
   "background_color": "#000000",
   "theme_color": "#000000",
