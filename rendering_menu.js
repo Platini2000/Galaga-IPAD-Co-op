@@ -363,13 +363,11 @@ function showMenuState() {
        isTransitioningToDemoViaScoreScreen = false;
 
 
-       // Stop all game sounds using the new mechanism
        if (typeof stopAllGameSoundsInternal === 'function') {
-           stopAllGameSoundsInternal(); // This now uses Web Audio API correctly
-       } else if (typeof stopAllGameSounds === 'function') { // Fallback if global not window yet
+           stopAllGameSoundsInternal();
+       } else if (typeof stopAllGameSounds === 'function') {
            stopAllGameSounds();
        }
-       // isGridSoundPlaying is handled by playSound/stopSound for gridBackgroundSound
 
        playerLives = 3; score = 0; level = 1;
        player1Lives = 3; player2Lives = 3; player1Score = 0; player2Score = 0; player1ShotsFired = 0; player2ShotsFired = 0; player1EnemiesHit = 0; player2EnemiesHit = 0; player1MaxLevelReached = 1; player2MaxLevelReached = 1;
@@ -378,6 +376,8 @@ function showMenuState() {
        gameOverSequenceStartTime = 0; gameStartTime = 0; forceCenterShipNextReset = false; player1CompletedLevel = -1;
        p1JustFiredSingle = false; p2JustFiredSingle = false;
        p1FireInputWasDown = false; p2FireInputWasDown = false;
+       isDraggingShip = false; p1_isDraggingShip = false; p2_isDraggingShip = false; // Reset touch drag flags
+       isTouchShootingEasyMode = false; // Reset easy mode touch shooting
 
        if (ship && typeof ship === 'object' && ship.hasOwnProperty('x') && gameCanvas && gameCanvas.width > 0 && gameCanvas.height > 0) {
             ship.x = Math.round(gameCanvas.width / 2 - SHIP_WIDTH / 2);
@@ -390,7 +390,7 @@ function showMenuState() {
        clearTimeout(mouseIdleTimerId);
        mouseIdleTimerId = setTimeout(hideCursor, 2000);
 
-       playSound(menuMusicSound); // Key
+       playSound(menuMusicSound);
        startAutoDemoTimer();
    } catch(e) {
        console.error("Error in showMenuState:", e);
@@ -402,6 +402,8 @@ function showMenuState() {
        player2TriggeredHighScoreSound = false;
        isShowingCoopPlayersReady = false; coopPlayersReadyStartTime = 0;
        isTransitioningToDemoViaScoreScreen = false;
+       isDraggingShip = false; p1_isDraggingShip = false; p2_isDraggingShip = false;
+       isTouchShootingEasyMode = false;
        clearTimeout(mouseIdleTimerId); mouseIdleTimerId = null;
        if(mainLoopId) cancelAnimationFrame(mainLoopId); mainLoopId = null;
        alert("Error returning to menu. Please refresh the page."); document.body.innerHTML = '<p style="color:white;">Error returning to menu. Please refresh.</p>';
@@ -411,7 +413,7 @@ function showMenuState() {
 /** Start de AI demo modus. */
 function startAIDemo() {
     if (isInGameState) return;
-    stopSound(menuMusicSound); // Key
+    stopSound(menuMusicSound);
     isShowingScoreScreen = false;
     isPlayerSelectMode = false;
     isFiringModeSelectMode = false;
@@ -434,7 +436,7 @@ function startAIDemo() {
 /** Start de CO-OP AI demo modus. */
 function startCoopAIDemo() {
     if (isInGameState) return;
-    stopSound(menuMusicSound); // Key
+    stopSound(menuMusicSound);
     isShowingScoreScreen = false;
     isPlayerSelectMode = false;
     isFiringModeSelectMode = false;
@@ -486,7 +488,7 @@ function baseStartGame(setManualControl) {
     try {
         if (!gameCanvas || !gameCtx) { console.error("Cannot start game - canvas not ready."); showMenuState(); return; }
         if (setManualControl) {
-            stopSound(menuMusicSound); // Key
+            stopSound(menuMusicSound);
         }
         stopAutoDemoTimer();
         isInGameState = true; isShowingScoreScreen = false; isPlayerSelectMode = false; isFiringModeSelectMode = false; isGameModeSelectMode = false;
@@ -523,7 +525,7 @@ function baseStartGame(setManualControl) {
 
         if (isTwoPlayerMode && selectedGameMode === 'coop' && level === 1) {
             if (!coopStartSoundPlayedThisSession) {
-                playSound(startSound); // Key
+                playSound(startSound);
                 coopStartSoundPlayedThisSession = true;
                 initialGameStartSoundPlayedThisSession = true;
             }
@@ -536,7 +538,7 @@ function baseStartGame(setManualControl) {
             }
         } else if (level === 1 && !isManualControl && !isCoopAIDemoActive) {
             if (!initialGameStartSoundPlayedThisSession) {
-                playSound(startSound); // Key
+                playSound(startSound);
                 initialGameStartSoundPlayedThisSession = true;
                 coopStartSoundPlayedThisSession = true;
             }
@@ -637,6 +639,8 @@ function handleCanvasClick(event) {
              aiPlayerActivelySeekingCaptureById = null;
              if(typeof stopGameAndShowMenu === 'function') stopGameAndShowMenu();
         }
+        // Click-to-shoot for normal mode (mouse) is implicitly handled by keyboard/gamepad mapping or AI.
+        // For touch, it's handled in handleTouchStart.
     } else if (isShowingScoreScreen && !isTransitioningToDemoViaScoreScreen) {
         if (typeof showMenuState === 'function') showMenuState();
     } else if (!isShowingScoreScreen) { // Menu
@@ -644,6 +648,28 @@ function handleCanvasClick(event) {
         const button1Rect = getMenuButtonRect(1);
         let clickedButton0 = button0Rect && checkCollision({ x: clickX, y: clickY, width: 1, height: 1 }, button0Rect);
         let clickedButton1 = button1Rect && checkCollision({ x: clickX, y: clickY, width: 1, height: 1 }, button1Rect);
+
+        // Check for 2UP score area click in Player Select Mode
+        if (isPlayerSelectMode) {
+            const ui2UPLabelWidth = gameCtx.measureText("2UP").width;
+            const scoreValueWidth = gameCtx.measureText("0").width * 6; // Approx 6 digits
+            const ui2UPAreaWidth = Math.max(ui2UPLabelWidth, scoreValueWidth) + 20; // Padding
+            const ui2UPAreaHeight = (SCORE_OFFSET_Y + 5 + 20) * 2; // Height of label + score + padding
+            const ui2UPAreaX = gameCanvas.width - MARGIN_SIDE - ui2UPAreaWidth / 2; // Centered on "2UP"
+            const ui2UPAreaY = MARGIN_TOP;
+
+            const twoUPRect = {
+                x: ui2UPAreaX - ui2UPAreaWidth / 2,
+                y: ui2UPAreaY,
+                width: ui2UPAreaWidth,
+                height: ui2UPAreaHeight
+            };
+            if (checkCollision({ x: clickX, y: clickY, width: 1, height: 1 }, twoUPRect)) {
+                showMenuState();
+                return;
+            }
+        }
+
 
         if (isGameModeSelectMode) {
             if (clickedButton0) {
@@ -695,16 +721,228 @@ function handleCanvasClick(event) {
                 if (typeof exitGame === 'function') exitGame();
                 stopAutoDemoTimer();
             } else {
-                triggerFullscreen(); // playSound(menuMusicSound) zit hierin
+                triggerFullscreen();
                 stopAutoDemoTimer();
             }
         }
     }
 }
 
+// --- Touch Event Handlers ---
+function handleTouchStart(event) {
+    event.preventDefault();
+    if (!gameCanvas) return;
 
-// --- Rendering Functies ---
-function createExplosion(x, y) { try { playSound(explosionSound); let particles = []; for (let i = 0; i < EXPLOSION_PARTICLE_COUNT; i++) { const angle = Math.random() * Math.PI * 2; const speed = Math.random() * (EXPLOSION_MAX_SPEED - EXPLOSION_MIN_SPEED) + EXPLOSION_MIN_SPEED; particles.push({ x: x, y: y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, radius: EXPLOSION_PARTICLE_RADIUS, alpha: 1.0 }); } explosions.push({ creationTime: Date.now(), duration: EXPLOSION_DURATION, particles: particles }); } catch (e) { console.error("Error creating explosion:", e); } } // Key
+    const rect = gameCanvas.getBoundingClientRect();
+    const scaleX = gameCanvas.width / rect.width;
+    const scaleY = gameCanvas.height / rect.height;
+    const now = Date.now();
+    lastTouchTapTime = now; // Record time of tap start
+
+    let blockAllTouchInput = false;
+    if (isShowingPlayerGameOverMessage || gameOverSequenceStartTime > 0 || isPaused) {
+        blockAllTouchInput = true;
+    }
+    if (blockAllTouchInput) { return; }
+
+    // Iterate over all new touches
+    for (let i = 0; i < event.changedTouches.length; i++) {
+        const touch = event.changedTouches[i];
+        const touchX = (touch.clientX - rect.left) * scaleX;
+        const touchY = (touch.clientY - rect.top) * scaleY;
+
+        if (isInGameState && isManualControl) {
+            let shipToCheck = null;
+            let isPlayer1Ship = false;
+            let isPlayer2Ship = false;
+            let currentShipDragFlag = false;
+            let setShipDragFlag = (val) => {};
+            let setTouchIdentifier = (id) => {};
+            let setTouchStartX = (val) => {};
+            let setShipStartDragX = (val) => {};
+            let currentShipTargetX = 0;
+            let shooterPlayerId = null;
+
+            // Determine which ship is being controlled / can be controlled
+            if (isTwoPlayerMode && selectedGameMode === 'coop') {
+                // Try to assign touch to P1 or P2 if they don't have an active touch
+                if (ship1 && player1Lives > 0 && !isPlayer1ShipCaptured && p1_touchIdentifier === null) {
+                    shipToCheck = ship1; isPlayer1Ship = true;
+                    currentShipDragFlag = p1_isDraggingShip;
+                    setShipDragFlag = (val) => { p1_isDraggingShip = val; };
+                    setTouchIdentifier = (id) => { p1_touchIdentifier = id; };
+                    setTouchStartX = (val) => { p1_touchStartX = val; };
+                    setShipStartDragX = (val) => { p1_shipStartDragX = val; };
+                    currentShipTargetX = ship1.x; shooterPlayerId = 'player1';
+                } else if (ship2 && player2Lives > 0 && !isPlayer2ShipCaptured && p2_touchIdentifier === null) {
+                    shipToCheck = ship2; isPlayer2Ship = true;
+                    currentShipDragFlag = p2_isDraggingShip;
+                    setShipDragFlag = (val) => { p2_isDraggingShip = val; };
+                    setTouchIdentifier = (id) => { p2_touchIdentifier = id; };
+                    setTouchStartX = (val) => { p2_touchStartX = val; };
+                    setShipStartDragX = (val) => { p2_shipStartDragX = val; };
+                    currentShipTargetX = ship2.x; shooterPlayerId = 'player2';
+                }
+            } else { // Single player or 2P Alternating
+                if (ship && playerLives > 0 && !isShipCaptured) {
+                    shipToCheck = ship;
+                    currentShipDragFlag = isDraggingShip;
+                    setShipDragFlag = (val) => { isDraggingShip = val; };
+                    setTouchIdentifier = (id) => {}; // Not strictly needed for single touch
+                    setTouchStartX = (val) => { touchStartX = val; };
+                    setShipStartDragX = (val) => { shipStartDragX = val; };
+                    currentShipTargetX = ship.x;
+                    shooterPlayerId = (isTwoPlayerMode && selectedGameMode === 'normal') ? `player${currentPlayer}` : 'player1';
+                }
+            }
+
+            let tappedOnShip = false;
+            if (shipToCheck) {
+                const shipRect = {
+                    x: shipToCheck.x - (shipToCheck.width * SHIP_TOUCH_AREA_X_PADDING_FACTOR),
+                    y: shipToCheck.y - shipToCheck.height * 0.5, // More generous Y touch area
+                    width: shipToCheck.width * (1 + 2 * SHIP_TOUCH_AREA_X_PADDING_FACTOR),
+                    height: shipToCheck.height * 2
+                };
+                 // Only allow dragging if touch is below a certain Y threshold on the canvas
+                if (touchY > gameCanvas.height * SHIP_TOUCH_AREA_Y_FACTOR && checkCollision({ x: touchX, y: touchY, width: 1, height: 1 }, shipRect)) {
+                    tappedOnShip = true;
+                    setShipDragFlag(true);
+                    setTouchIdentifier(touch.identifier);
+                    setTouchStartX(touchX);
+                    setShipStartDragX(currentShipTargetX);
+                }
+            }
+
+            if (!tappedOnShip && shooterPlayerId) { // Tap was not on a ship, so it's a shoot command
+                if (selectedFiringMode === 'easy') {
+                    // Toggle rapid fire for the correct player
+                    if (shooterPlayerId === 'player1') isTouchShootingEasyMode = !isTouchShootingEasyMode; // Assuming single isTouchShootingEasyMode for now
+                    else if (shooterPlayerId === 'player2') isTouchShootingEasyMode = !isTouchShootingEasyMode; // This logic needs to be player-specific if P1 & P2 can have different easy mode states
+                    else isTouchShootingEasyMode = !isTouchShootingEasyMode;
+                } else { // Normal mode
+                    firePlayerBullet(shooterPlayerId);
+                }
+            }
+
+        } else if (!isInGameState) { // Menu or Score Screen
+            if (isShowingScoreScreen && !isTransitioningToDemoViaScoreScreen) {
+                showMenuState();
+                return;
+            } else if (!isShowingScoreScreen) { // Menu
+                const button0Rect = getMenuButtonRect(0);
+                const button1Rect = getMenuButtonRect(1);
+                let tappedButton0 = button0Rect && checkCollision({ x: touchX, y: touchY, width: 1, height: 1 }, button0Rect);
+                let tappedButton1 = button1Rect && checkCollision({ x: touchX, y: touchY, width: 1, height: 1 }, button1Rect);
+
+                if (isPlayerSelectMode) {
+                    const ui2UPLabelWidth = gameCtx.measureText("2UP").width;
+                    const scoreValueWidth = gameCtx.measureText("0").width * 6;
+                    const ui2UPAreaWidth = Math.max(ui2UPLabelWidth, scoreValueWidth) + 40; // Extra padding for touch
+                    const ui2UPAreaHeight = (SCORE_OFFSET_Y + 5 + 20) * 2.5; // Extra padding
+                    const ui2UPAreaX = gameCanvas.width - MARGIN_SIDE - ui2UPAreaWidth / 2;
+                    const ui2UPAreaY = MARGIN_TOP - 10; // Shift up slightly for easier tapping
+
+                    const twoUPRect = { x: ui2UPAreaX - ui2UPAreaWidth / 2, y: ui2UPAreaY, width: ui2UPAreaWidth, height: ui2UPAreaHeight };
+                    if (checkCollision({ x: touchX, y: touchY, width: 1, height: 1 }, twoUPRect)) {
+                        showMenuState();
+                        return; // Exit after handling this specific interaction
+                    }
+                }
+
+
+                if (isGameModeSelectMode) {
+                    if (tappedButton0) { selectedGameMode = 'normal'; isGameModeSelectMode = false; isFiringModeSelectMode = true; selectedButtonIndex = 0; stopAutoDemoTimer(); }
+                    else if (tappedButton1) { selectedGameMode = 'coop'; isGameModeSelectMode = false; isFiringModeSelectMode = true; selectedButtonIndex = 0; stopAutoDemoTimer(); }
+                } else if (isFiringModeSelectMode) {
+                    if (tappedButton0) { selectedFiringMode = 'rapid'; baseStartGame(true); stopAutoDemoTimer(); }
+                    else if (tappedButton1) { selectedFiringMode = 'single'; baseStartGame(true); stopAutoDemoTimer(); }
+                } else if (isPlayerSelectMode) {
+                    if (tappedButton0) { startGame1P(); stopAutoDemoTimer(); }
+                    else if (tappedButton1) { startGame2P(); stopAutoDemoTimer(); }
+                } else { // Hoofdmenu
+                    if (tappedButton0) { isPlayerSelectMode = true; selectedButtonIndex = 0; startAutoDemoTimer(); }
+                    else if (tappedButton1) { exitGame(); stopAutoDemoTimer(); }
+                }
+            }
+        }
+    } // End for loop over changedTouches
+}
+
+
+function handleTouchMove(event) {
+    event.preventDefault();
+    if (!gameCanvas || !isManualControl || isPaused) return;
+
+    for (let i = 0; i < event.changedTouches.length; i++) {
+        const touch = event.changedTouches[i];
+        const rect = gameCanvas.getBoundingClientRect();
+        const scaleX = gameCanvas.width / rect.width;
+        const touchX = (touch.clientX - rect.left) * scaleX;
+
+        if (isTwoPlayerMode && selectedGameMode === 'coop') {
+            if (p1_isDraggingShip && p1_touchIdentifier === touch.identifier && ship1) {
+                const deltaX = touchX - p1_touchStartX;
+                ship1.targetX = p1_shipStartDragX + deltaX;
+                const p1EffectiveWidth = ship1.width + (player1IsDualShipActive ? DUAL_SHIP_OFFSET_X : 0);
+                ship1.targetX = Math.max(0, Math.min(gameCanvas.width - p1EffectiveWidth, ship1.targetX));
+            } else if (p2_isDraggingShip && p2_touchIdentifier === touch.identifier && ship2) {
+                const deltaX = touchX - p2_touchStartX;
+                ship2.targetX = p2_shipStartDragX + deltaX;
+                const p2EffectiveWidth = ship2.width + (player2IsDualShipActive ? DUAL_SHIP_OFFSET_X : 0);
+                ship2.targetX = Math.max(0, Math.min(gameCanvas.width - p2EffectiveWidth, ship2.targetX));
+            }
+        } else { // Single player or 2P Alternating
+            if (isDraggingShip && ship) {
+                const deltaX = touchX - touchStartX;
+                ship.targetX = shipStartDragX + deltaX;
+                const effectiveWidth = ship.width + (isDualShipActive ? DUAL_SHIP_OFFSET_X : 0);
+                ship.targetX = Math.max(0, Math.min(gameCanvas.width - effectiveWidth, ship.targetX));
+            }
+        }
+    }
+}
+
+function handleTouchEnd(event) {
+    event.preventDefault();
+    if (!gameCanvas) return;
+
+    for (let i = 0; i < event.changedTouches.length; i++) {
+        const touch = event.changedTouches[i];
+
+        if (isTwoPlayerMode && selectedGameMode === 'coop') {
+            if (p1_touchIdentifier === touch.identifier) {
+                p1_isDraggingShip = false;
+                p1_touchIdentifier = null;
+            }
+            if (p2_touchIdentifier === touch.identifier) {
+                p2_isDraggingShip = false;
+                p2_touchIdentifier = null;
+            }
+        } else {
+            isDraggingShip = false;
+        }
+
+        // Easy mode shooting logic: if it was a very short tap (not a drag),
+        // isTouchShootingEasyMode was already toggled in handleTouchStart.
+        // We don't need to do anything extra here for easy mode shooting on touchend itself,
+        // as the state is managed by the tap in handleTouchStart.
+        // The main purpose of checking drag here is to PREVENT a drag from ALSO toggling shooting.
+        const touchDuration = Date.now() - lastTouchTapTime;
+        if (touchDuration > TAP_DURATION_THRESHOLD) { // If it was a drag or long press
+            // If it was a drag, we don't want to toggle easy mode shooting.
+            // The isTouchShootingEasyMode is handled on tap start.
+        }
+    }
+}
+
+function handleTouchCancel(event) {
+    handleTouchEnd(event); // Treat cancel the same as end for simplicity
+}
+
+
+/** Rendering Functies (createExplosion is hier al correct) */
+function createExplosion(x, y) { try { playSound(explosionSound); let particles = []; for (let i = 0; i < EXPLOSION_PARTICLE_COUNT; i++) { const angle = Math.random() * Math.PI * 2; const speed = Math.random() * (EXPLOSION_MAX_SPEED - EXPLOSION_MIN_SPEED) + EXPLOSION_MIN_SPEED; particles.push({ x: x, y: y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, radius: EXPLOSION_PARTICLE_RADIUS, alpha: 1.0 }); } explosions.push({ creationTime: Date.now(), duration: EXPLOSION_DURATION, particles: particles }); } catch (e) { console.error("Error creating explosion:", e); } }
 
 
 // --- EINDE deel 2      van 3 dit codeblok ---
