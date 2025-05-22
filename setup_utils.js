@@ -1,5 +1,5 @@
 // --- START OF FILE setup_utils.js ---
-// --- DEEL 1, 2 en 3 GECOMBINEERD EN GEWIJZIGD voor Web Audio API ---
+// --- VOLLEDIG BESTAND GEWIJZIGD voor Web Audio API en Touch Event Listener Setup ---
 
 const
     // Enemy Types (Needs to be defined BEFORE game_logic.js uses them)
@@ -162,7 +162,7 @@ let aiCanShootTime = 0;
 let connectedGamepadIndex = null; let connectedGamepadIndexP2 = null;
 let previousButtonStates = []; let previousDemoButtonStates = []; let previousGameButtonStates = []; let previousGameButtonStatesP2 = [];
 let selectedButtonIndex = -1; let joystickMovedVerticallyLastFrame = false;
-let isGridSoundPlaying = false; // Zal mogelijk anders werken met Web Audio API
+let isGridSoundPlaying = false;
 let gridJustCompleted = false;
 let player1ShotsFired = 0;
 let player2ShotsFired = 0;
@@ -205,6 +205,27 @@ let capturedShipRespawnX_NormalMode = 0;
 let coopPartner1CapturedTime = 0;
 let coopPartner2CapturedTime = 0;
 
+// --- Globale Variabelen voor Touch Input ---
+let isDraggingShip = false;         // Voor 1P of actieve speler in 2P Alternating
+let touchStartX = 0;                // Start X van de drag touch
+let shipStartDragX = 0;             // Start X van het schip bij begin drag
+let isTouchShootingEasyMode = false;// Vlag voor easy mode rapid fire via touch
+let lastTouchTapTime = 0;           // Timestamp van de laatste tap (om tap vs drag te onderscheiden)
+const TAP_DURATION_THRESHOLD = 200; // Max duur in ms voor een 'tap' (anders is het een hold/drag)
+const SHIP_TOUCH_AREA_Y_FACTOR = 0.75; // Factor van canvas hoogte; touches onder deze Y kunnen schipdrag starten
+const SHIP_TOUCH_AREA_X_PADDING_FACTOR = 0.1; // Padding links/rechts van schip voor touch drag
+
+// CO-OP Specifieke Touch Variabelen
+let p1_isDraggingShip = false;
+let p1_touchStartX = 0;
+let p1_shipStartDragX = 0;
+let p1_touchIdentifier = null; // Om P1's vinger te volgen bij multi-touch
+
+let p2_isDraggingShip = false;
+let p2_touchStartX = 0;
+let p2_shipStartDragX = 0;
+let p2_touchIdentifier = null; // Om P2's vinger te volgen bij multi-touch
+
 
 // --- Afbeeldingen ---
 const shipImage = new Image(), beeImage = new Image(), butterflyImage = new Image(), bossGalagaImage = new Image(), bulletImage = new Image(), enemyBulletImage = new Image(), logoImage = new Image();
@@ -218,7 +239,7 @@ level1Image.src = 'Afbeeldingen/Level-1.png'; level5Image.src = 'Afbeeldingen/Le
 // --- Web Audio API Globals ---
 let audioContext;
 let masterGainNode;
-let soundAssets = {}; // Om AudioBuffers, GainNodes, en actieve sources op te slaan
+let soundAssets = {};
 
 // Namen voor geluidsbestanden (zal gebruikt worden als keys in soundAssets)
 const captureSound = 'CaptureSound', shipCapturedSound = 'ShipCapturedSound', dualShipSound = 'DualShipSound',
@@ -261,11 +282,11 @@ async function loadSound(soundName, filePath, loop = false, initialVolume = 1.0)
             buffer: audioBuffer,
             gainNode: gainNode,
             loop: loop,
-            activeSources: [] // To keep track of currently playing instances for this sound
+            activeSources: []
         };
     } catch (e) {
         console.error(`Error loading sound ${soundName} from ${filePath}:`, e);
-        soundAssets[soundName] = { buffer: null, gainNode: null, loop: false, activeSources: [] }; // Fallback
+        soundAssets[soundName] = { buffer: null, gainNode: null, loop: false, activeSources: [] };
     }
 }
 
@@ -293,20 +314,17 @@ function initializeDOMElements() {
     csCurrentChainHits = 0; csCurrentChainScore = 0; csLastHitTime = 0; csLastChainHitPosition = null;
     normalWaveCurrentChainHits = 0; normalWaveCurrentChainScore = 0; normalWaveLastHitTime = 0; normalWaveLastChainHitPosition = null;
 
-    // Initialize Web Audio API
     try {
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         masterGainNode = audioContext.createGain();
-        masterGainNode.gain.setValueAtTime(1.0, audioContext.currentTime); // Master volume
+        masterGainNode.gain.setValueAtTime(1.0, audioContext.currentTime);
         masterGainNode.connect(audioContext.destination);
     } catch (e) {
         console.error("Web Audio API is not supported in this browser.", e);
-        // Provide a fallback or disable audio
         alert("Web Audio API is not supported. Game audio will be disabled.");
-        audioContext = null; // Ensure audio functions don't try to use it
+        audioContext = null;
     }
 
-    // Load all sounds if audioContext is available
     if (audioContext) {
         const soundFiles = [
             { name: playerShootSound,    path: "Geluiden/firing.mp3",          volume: 0.4 },
@@ -334,22 +352,15 @@ function initializeDOMElements() {
             { name: tripleAttackSound,   path: "Geluiden/Triple.mp3",          volume: 0.3 },
             { name: captureSound,        path: "Geluiden/Capture.mp3",         volume: 0.6 },
             { name: shipCapturedSound,   path: "Geluiden/Capture-ship.mp3",    volume: 0.3 },
-            { name: dualShipSound,       path: "Geluiden/coin.mp3",            volume: 0.4 }, // Re-used coin sound
+            { name: dualShipSound,       path: "Geluiden/coin.mp3",            volume: 0.4 },
             { name: resultsMusicSound,   path: "Geluiden/results-music.mp3",   volume: 0.2 },
             { name: hiScoreSound,        path: "Geluiden/hi-score.mp3",        volume: 0.2 }
         ];
-
         const loadingPromises = soundFiles.map(sf => loadSound(sf.name, sf.path, sf.loop, sf.volume));
-
-        // Optionally, you can wait for all sounds to load before considering initialization complete
-        // For now, we'll let them load asynchronously.
-        Promise.all(loadingPromises).then(() => {
-            // console.log("All sounds processed (loaded or failed).");
-        }).catch(error => {
+        Promise.all(loadingPromises).then(() => {}).catch(error => {
             console.error("Error during batch sound loading:", error);
         });
     }
-
 
     const imagesToLoad = [ shipImage, beeImage, bulletImage, bossGalagaImage, butterflyImage, logoImage, level1Image, level5Image, level10Image, level20Image, level30Image, level50Image, beeImage2, butterflyImage2, bossGalagaImage2 ];
     imagesToLoad.forEach(img => { if (img) img.onerror = () => console.error(`Error loading image: ${img.src}`); });
@@ -363,6 +374,14 @@ function setupInitialEventListeners() {
         window.addEventListener("gamepadconnected", handleGamepadConnected);
         window.addEventListener("gamepaddisconnected", handleGamepadDisconnected);
         window.addEventListener('resize', resizeCanvases);
+
+        if (gameCanvas) {
+            gameCanvas.addEventListener('touchstart', handleTouchStart, { passive: false });
+            gameCanvas.addEventListener('touchmove', handleTouchMove, { passive: false });
+            gameCanvas.addEventListener('touchend', handleTouchEnd, { passive: false });
+            gameCanvas.addEventListener('touchcancel', handleTouchCancel, { passive: false });
+        }
+
     } catch(e) {
         console.error("Error setting up initial event listeners:", e);
     }
@@ -399,20 +418,16 @@ function getCurrentGridSlotPosition(gridRow, gridCol, enemyWidth) {
 /** Safely attempts to play a sound from the beginning. Handles potential errors. */
 function playSound(soundNameKey) {
     if (!audioContext || !soundAssets[soundNameKey] || !soundAssets[soundNameKey].buffer) {
-        // console.warn(`Sound not available or audio context error: ${soundNameKey}`);
         return;
     }
     if (isPaused && soundNameKey !== menuMusicSound) return;
 
     try {
         const asset = soundAssets[soundNameKey];
-        // Stop all currently playing instances of this sound IF it's not a looping sound
-        // or if it is a looping sound that is already playing.
         if (asset.loop && asset.activeSources.some(s => s.loop)) {
-             // If it's a looping sound and already playing, don't restart it.
             return;
         }
-        stopSound(soundNameKey); // Stop previous non-looping instances or the current loop if it's being restarted.
+        stopSound(soundNameKey);
 
         const source = audioContext.createBufferSource();
         source.buffer = asset.buffer;
@@ -425,8 +440,6 @@ function playSound(soundNameKey) {
         source.onended = () => {
             asset.activeSources = asset.activeSources.filter(s => s !== source);
         };
-
-        // Special handling for gridBackgroundSound to manage isGridSoundPlaying state
         if (soundNameKey === gridBackgroundSound) {
             isGridSoundPlaying = true;
         }
@@ -447,12 +460,9 @@ function stopSound(soundNameKey) {
             try {
                 source.stop(0);
             } catch (e) {
-                // Ignore errors if source already stopped
             }
         });
-        asset.activeSources = []; // Clear the list of active sources
-
-        // Special handling for gridBackgroundSound
+        asset.activeSources = [];
         if (soundNameKey === gridBackgroundSound) {
             isGridSoundPlaying = false;
         }
@@ -673,9 +683,8 @@ function pauseAllSounds() {
     if (audioContext && audioContext.state === 'running') {
         audioContext.suspend().catch(e => console.error("Error suspending audio context:", e));
     }
-    // Stop looping menu music specifically if it's playing during pause
     if (soundAssets[menuMusicSound] && soundAssets[menuMusicSound].activeSources.length > 0) {
-         stopSound(menuMusicSound); // Ensure menu music stops if game is paused
+         stopSound(menuMusicSound);
     }
 }
 
@@ -683,7 +692,6 @@ function resumeAllSounds() {
     if (audioContext && audioContext.state === 'suspended') {
         audioContext.resume().catch(e => console.error("Error resuming audio context:", e));
     }
-    // If returning to menu, restart menu music, otherwise game sounds will resume with context
     if (!isInGameState && soundAssets[menuMusicSound]) {
         playSound(menuMusicSound);
     }
@@ -727,7 +735,6 @@ function triggerFinalGameOverSequence() {
         isPaused = false; isShowingDemoText = false; isShowingIntro = false; isWaveTransitioning = false; showCsHitsMessage = false; showExtraLifeMessage = false; showPerfectMessage = false; showCSClearMessage = false; showCsHitsForClearMessage = false; showCsScoreForClearMessage = false; showReadyMessage = false; showCsBonusScoreMessage = false; isShowingPlayerGameOverMessage = false; isEntrancePhaseActive = false; isCsCompletionDelayActive = false; csCompletionDelayStartTime = 0; csCompletionResultIsPerfect = false; csIntroSoundPlayed = false;
         if (isManualControl) { saveHighScore(); }
 
-        // Stop all sounds using Web Audio API approach if available
         if (audioContext) {
             Object.keys(soundAssets).forEach(soundNameKey => {
                 if (soundAssets[soundNameKey] && soundAssets[soundNameKey].activeSources) {
@@ -756,5 +763,4 @@ function triggerFinalGameOverSequence() {
 
 function triggerGameOver() { triggerFinalGameOverSequence(); }
 
-// --- EINDE deel 1, 2 en 3 (gecombineerd) ---
 // --- END OF FILE setup_utils.js ---
