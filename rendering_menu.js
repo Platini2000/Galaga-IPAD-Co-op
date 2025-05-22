@@ -376,8 +376,8 @@ function showMenuState() {
        gameOverSequenceStartTime = 0; gameStartTime = 0; forceCenterShipNextReset = false; player1CompletedLevel = -1;
        p1JustFiredSingle = false; p2JustFiredSingle = false;
        p1FireInputWasDown = false; p2FireInputWasDown = false;
-       isDraggingShip = false; p1_isDraggingShip = false; p2_isDraggingShip = false; // Reset touch drag flags
-       isTouchShootingEasyMode = false; // Reset easy mode touch shooting
+       isDraggingShip = false; p1_isDraggingShip = false; p2_isDraggingShip = false;
+       isTouchShootingEasyMode = false;
 
        if (ship && typeof ship === 'object' && ship.hasOwnProperty('x') && gameCanvas && gameCanvas.width > 0 && gameCanvas.height > 0) {
             ship.x = Math.round(gameCanvas.width / 2 - SHIP_WIDTH / 2);
@@ -639,8 +639,6 @@ function handleCanvasClick(event) {
              aiPlayerActivelySeekingCaptureById = null;
              if(typeof stopGameAndShowMenu === 'function') stopGameAndShowMenu();
         }
-        // Click-to-shoot for normal mode (mouse) is implicitly handled by keyboard/gamepad mapping or AI.
-        // For touch, it's handled in handleTouchStart.
     } else if (isShowingScoreScreen && !isTransitioningToDemoViaScoreScreen) {
         if (typeof showMenuState === 'function') showMenuState();
     } else if (!isShowingScoreScreen) { // Menu
@@ -649,13 +647,12 @@ function handleCanvasClick(event) {
         let clickedButton0 = button0Rect && checkCollision({ x: clickX, y: clickY, width: 1, height: 1 }, button0Rect);
         let clickedButton1 = button1Rect && checkCollision({ x: clickX, y: clickY, width: 1, height: 1 }, button1Rect);
 
-        // Check for 2UP score area click in Player Select Mode
         if (isPlayerSelectMode) {
             const ui2UPLabelWidth = gameCtx.measureText("2UP").width;
-            const scoreValueWidth = gameCtx.measureText("0").width * 6; // Approx 6 digits
-            const ui2UPAreaWidth = Math.max(ui2UPLabelWidth, scoreValueWidth) + 20; // Padding
-            const ui2UPAreaHeight = (SCORE_OFFSET_Y + 5 + 20) * 2; // Height of label + score + padding
-            const ui2UPAreaX = gameCanvas.width - MARGIN_SIDE - ui2UPAreaWidth / 2; // Centered on "2UP"
+            const scoreValueWidth = gameCtx.measureText("0").width * 6;
+            const ui2UPAreaWidth = Math.max(ui2UPLabelWidth, scoreValueWidth) + 20;
+            const ui2UPAreaHeight = (SCORE_OFFSET_Y + 5 + 20) * 2;
+            const ui2UPAreaX = gameCanvas.width - MARGIN_SIDE - ui2UPAreaWidth / 2;
             const ui2UPAreaY = MARGIN_TOP;
 
             const twoUPRect = {
@@ -687,7 +684,7 @@ function handleCanvasClick(event) {
             } else {
                 isGameModeSelectMode = false;
                 isPlayerSelectMode = true;
-                selectedButtonIndex = 1;
+                selectedButtonIndex = 1; // Terug naar "2 PLAYER" optie
                 startAutoDemoTimer();
             }
         } else if (isFiringModeSelectMode) {
@@ -707,22 +704,23 @@ function handleCanvasClick(event) {
         } else if (isPlayerSelectMode) {
             if (clickedButton0) { startGame1P(); stopAutoDemoTimer(); }
             else if (clickedButton1) { startGame2P(); stopAutoDemoTimer(); }
-            else {
-                isPlayerSelectMode = false;
+            else { // Clicked outside buttons in player select
+                isPlayerSelectMode = false; // Go back to main menu
                 selectedButtonIndex = 0;
                 startAutoDemoTimer();
             }
         } else { // Hoofdmenu
-            if (clickedButton0) {
+            if (clickedButton0) { // START GAME
                 isPlayerSelectMode = true;
                 selectedButtonIndex = 0;
                 startAutoDemoTimer();
-            } else if (clickedButton1) {
+            } else if (clickedButton1) { // GAME EXIT
                 if (typeof exitGame === 'function') exitGame();
                 stopAutoDemoTimer();
-            } else {
-                triggerFullscreen();
-                stopAutoDemoTimer();
+            } else { // Clicked outside buttons in main menu
+                // triggerFullscreen(); // Verwijderd om ongewenst fullscreen te voorkomen
+                // playSound(menuMusicSound); // Optioneel: speel menu muziek als er ergens geklikt wordt
+                stopAutoDemoTimer(); // Stop timer als er interactie is
             }
         }
     }
@@ -737,7 +735,7 @@ function handleTouchStart(event) {
     const scaleX = gameCanvas.width / rect.width;
     const scaleY = gameCanvas.height / rect.height;
     const now = Date.now();
-    lastTouchTapTime = now; // Record time of tap start
+    lastTouchTapTime = now;
 
     let blockAllTouchInput = false;
     if (isShowingPlayerGameOverMessage || gameOverSequenceStartTime > 0 || isPaused) {
@@ -745,90 +743,100 @@ function handleTouchStart(event) {
     }
     if (blockAllTouchInput) { return; }
 
-    // Iterate over all new touches
     for (let i = 0; i < event.changedTouches.length; i++) {
         const touch = event.changedTouches[i];
         const touchX = (touch.clientX - rect.left) * scaleX;
         const touchY = (touch.clientY - rect.top) * scaleY;
+        let touchHandledForThisFinger = false;
 
         if (isInGameState && isManualControl) {
             let shipToCheck = null;
-            let isPlayer1Ship = false;
-            let isPlayer2Ship = false;
-            let currentShipDragFlag = false;
+            let isPlayer1Ship = false, isPlayer2Ship = false;
             let setShipDragFlag = (val) => {};
             let setTouchIdentifier = (id) => {};
             let setTouchStartX = (val) => {};
             let setShipStartDragX = (val) => {};
-            let currentShipTargetX = 0;
+            let currentShipObjectX = 0;
             let shooterPlayerId = null;
+            let shipEffectiveWidth = SHIP_WIDTH;
 
-            // Determine which ship is being controlled / can be controlled
+
             if (isTwoPlayerMode && selectedGameMode === 'coop') {
-                // Try to assign touch to P1 or P2 if they don't have an active touch
-                if (ship1 && player1Lives > 0 && !isPlayer1ShipCaptured && p1_touchIdentifier === null) {
+                // Prioritize unassigned touches for ships
+                if (ship1 && player1Lives > 0 && !isPlayer1ShipCaptured && !player1NeedsRespawnAfterCapture && p1_touchIdentifier === null) {
                     shipToCheck = ship1; isPlayer1Ship = true;
-                    currentShipDragFlag = p1_isDraggingShip;
                     setShipDragFlag = (val) => { p1_isDraggingShip = val; };
                     setTouchIdentifier = (id) => { p1_touchIdentifier = id; };
                     setTouchStartX = (val) => { p1_touchStartX = val; };
                     setShipStartDragX = (val) => { p1_shipStartDragX = val; };
-                    currentShipTargetX = ship1.x; shooterPlayerId = 'player1';
-                } else if (ship2 && player2Lives > 0 && !isPlayer2ShipCaptured && p2_touchIdentifier === null) {
+                    currentShipObjectX = ship1.x; shooterPlayerId = 'player1';
+                    shipEffectiveWidth = ship1.width + (player1IsDualShipActive ? DUAL_SHIP_OFFSET_X : 0);
+                } else if (ship2 && player2Lives > 0 && !isPlayer2ShipCaptured && !player2NeedsRespawnAfterCapture && p2_touchIdentifier === null) {
                     shipToCheck = ship2; isPlayer2Ship = true;
-                    currentShipDragFlag = p2_isDraggingShip;
                     setShipDragFlag = (val) => { p2_isDraggingShip = val; };
                     setTouchIdentifier = (id) => { p2_touchIdentifier = id; };
                     setTouchStartX = (val) => { p2_touchStartX = val; };
                     setShipStartDragX = (val) => { p2_shipStartDragX = val; };
-                    currentShipTargetX = ship2.x; shooterPlayerId = 'player2';
+                    currentShipObjectX = ship2.x; shooterPlayerId = 'player2';
+                    shipEffectiveWidth = ship2.width + (player2IsDualShipActive ? DUAL_SHIP_OFFSET_X : 0);
+                } else if (p1_touchIdentifier === null && p2_touchIdentifier === null) { // Fallback if both are null, assign to P1 first if available
+                     if (ship1 && player1Lives > 0 && !isPlayer1ShipCaptured && !player1NeedsRespawnAfterCapture) {
+                        shipToCheck = ship1; isPlayer1Ship = true;
+                        setShipDragFlag = (val) => { p1_isDraggingShip = val; };
+                        setTouchIdentifier = (id) => { p1_touchIdentifier = id; };
+                        setTouchStartX = (val) => { p1_touchStartX = val; };
+                        setShipStartDragX = (val) => { p1_shipStartDragX = val; };
+                        currentShipObjectX = ship1.x; shooterPlayerId = 'player1';
+                        shipEffectiveWidth = ship1.width + (player1IsDualShipActive ? DUAL_SHIP_OFFSET_X : 0);
+                    }
                 }
-            } else { // Single player or 2P Alternating
+            } else { // 1P or 2P Alternating
                 if (ship && playerLives > 0 && !isShipCaptured) {
                     shipToCheck = ship;
-                    currentShipDragFlag = isDraggingShip;
                     setShipDragFlag = (val) => { isDraggingShip = val; };
-                    setTouchIdentifier = (id) => {}; // Not strictly needed for single touch
+                    setTouchIdentifier = (id) => {}; // Single touch, ID not as critical
                     setTouchStartX = (val) => { touchStartX = val; };
                     setShipStartDragX = (val) => { shipStartDragX = val; };
-                    currentShipTargetX = ship.x;
+                    currentShipObjectX = ship.x;
                     shooterPlayerId = (isTwoPlayerMode && selectedGameMode === 'normal') ? `player${currentPlayer}` : 'player1';
+                    shipEffectiveWidth = ship.width + (isDualShipActive ? DUAL_SHIP_OFFSET_X : 0);
                 }
             }
 
-            let tappedOnShip = false;
+            let tappedOnThisShip = false;
             if (shipToCheck) {
                 const shipRect = {
-                    x: shipToCheck.x - (shipToCheck.width * SHIP_TOUCH_AREA_X_PADDING_FACTOR),
-                    y: shipToCheck.y - shipToCheck.height * 0.5, // More generous Y touch area
-                    width: shipToCheck.width * (1 + 2 * SHIP_TOUCH_AREA_X_PADDING_FACTOR),
+                    x: shipToCheck.x - (shipEffectiveWidth * SHIP_TOUCH_AREA_X_PADDING_FACTOR),
+                    y: shipToCheck.y - shipToCheck.height * 0.5,
+                    width: shipEffectiveWidth * (1 + 2 * SHIP_TOUCH_AREA_X_PADDING_FACTOR),
                     height: shipToCheck.height * 2
                 };
-                 // Only allow dragging if touch is below a certain Y threshold on the canvas
                 if (touchY > gameCanvas.height * SHIP_TOUCH_AREA_Y_FACTOR && checkCollision({ x: touchX, y: touchY, width: 1, height: 1 }, shipRect)) {
-                    tappedOnShip = true;
+                    tappedOnThisShip = true;
                     setShipDragFlag(true);
                     setTouchIdentifier(touch.identifier);
                     setTouchStartX(touchX);
-                    setShipStartDragX(currentShipTargetX);
+                    setShipStartDragX(currentShipObjectX);
+                    touchHandledForThisFinger = true;
                 }
             }
 
-            if (!tappedOnShip && shooterPlayerId) { // Tap was not on a ship, so it's a shoot command
+            if (!tappedOnThisShip && !touchHandledForThisFinger && shooterPlayerId) {
                 if (selectedFiringMode === 'easy') {
-                    // Toggle rapid fire for the correct player
-                    if (shooterPlayerId === 'player1') isTouchShootingEasyMode = !isTouchShootingEasyMode; // Assuming single isTouchShootingEasyMode for now
-                    else if (shooterPlayerId === 'player2') isTouchShootingEasyMode = !isTouchShootingEasyMode; // This logic needs to be player-specific if P1 & P2 can have different easy mode states
-                    else isTouchShootingEasyMode = !isTouchShootingEasyMode;
-                } else { // Normal mode
+                    // For CO-OP, easy mode toggle should be player-specific if we had separate flags.
+                    // Current `isTouchShootingEasyMode` is global. This means one player's tap affects both.
+                    // This is a simplification for now.
+                    isTouchShootingEasyMode = !isTouchShootingEasyMode;
+                } else {
                     firePlayerBullet(shooterPlayerId);
                 }
+                touchHandledForThisFinger = true;
             }
 
         } else if (!isInGameState) { // Menu or Score Screen
             if (isShowingScoreScreen && !isTransitioningToDemoViaScoreScreen) {
                 showMenuState();
-                return;
+                touchHandledForThisFinger = true;
             } else if (!isShowingScoreScreen) { // Menu
                 const button0Rect = getMenuButtonRect(0);
                 const button1Rect = getMenuButtonRect(1);
@@ -838,35 +846,36 @@ function handleTouchStart(event) {
                 if (isPlayerSelectMode) {
                     const ui2UPLabelWidth = gameCtx.measureText("2UP").width;
                     const scoreValueWidth = gameCtx.measureText("0").width * 6;
-                    const ui2UPAreaWidth = Math.max(ui2UPLabelWidth, scoreValueWidth) + 40; // Extra padding for touch
-                    const ui2UPAreaHeight = (SCORE_OFFSET_Y + 5 + 20) * 2.5; // Extra padding
+                    const ui2UPAreaWidth = Math.max(ui2UPLabelWidth, scoreValueWidth) + 40;
+                    const ui2UPAreaHeight = (SCORE_OFFSET_Y + 5 + 20) * 2.5;
                     const ui2UPAreaX = gameCanvas.width - MARGIN_SIDE - ui2UPAreaWidth / 2;
-                    const ui2UPAreaY = MARGIN_TOP - 10; // Shift up slightly for easier tapping
-
+                    const ui2UPAreaY = MARGIN_TOP - 10;
                     const twoUPRect = { x: ui2UPAreaX - ui2UPAreaWidth / 2, y: ui2UPAreaY, width: ui2UPAreaWidth, height: ui2UPAreaHeight };
                     if (checkCollision({ x: touchX, y: touchY, width: 1, height: 1 }, twoUPRect)) {
                         showMenuState();
-                        return; // Exit after handling this specific interaction
+                        touchHandledForThisFinger = true;
                     }
                 }
 
-
-                if (isGameModeSelectMode) {
-                    if (tappedButton0) { selectedGameMode = 'normal'; isGameModeSelectMode = false; isFiringModeSelectMode = true; selectedButtonIndex = 0; stopAutoDemoTimer(); }
-                    else if (tappedButton1) { selectedGameMode = 'coop'; isGameModeSelectMode = false; isFiringModeSelectMode = true; selectedButtonIndex = 0; stopAutoDemoTimer(); }
-                } else if (isFiringModeSelectMode) {
-                    if (tappedButton0) { selectedFiringMode = 'rapid'; baseStartGame(true); stopAutoDemoTimer(); }
-                    else if (tappedButton1) { selectedFiringMode = 'single'; baseStartGame(true); stopAutoDemoTimer(); }
-                } else if (isPlayerSelectMode) {
-                    if (tappedButton0) { startGame1P(); stopAutoDemoTimer(); }
-                    else if (tappedButton1) { startGame2P(); stopAutoDemoTimer(); }
-                } else { // Hoofdmenu
-                    if (tappedButton0) { isPlayerSelectMode = true; selectedButtonIndex = 0; startAutoDemoTimer(); }
-                    else if (tappedButton1) { exitGame(); stopAutoDemoTimer(); }
+                if (!touchHandledForThisFinger) {
+                    if (isGameModeSelectMode) {
+                        if (tappedButton0) { selectedGameMode = 'normal'; isGameModeSelectMode = false; isFiringModeSelectMode = true; selectedButtonIndex = 0; stopAutoDemoTimer(); }
+                        else if (tappedButton1) { selectedGameMode = 'coop'; isGameModeSelectMode = false; isFiringModeSelectMode = true; selectedButtonIndex = 0; stopAutoDemoTimer(); }
+                    } else if (isFiringModeSelectMode) {
+                        if (tappedButton0) { selectedFiringMode = 'rapid'; baseStartGame(true); stopAutoDemoTimer(); }
+                        else if (tappedButton1) { selectedFiringMode = 'single'; baseStartGame(true); stopAutoDemoTimer(); }
+                    } else if (isPlayerSelectMode) {
+                        if (tappedButton0) { startGame1P(); stopAutoDemoTimer(); }
+                        else if (tappedButton1) { startGame2P(); stopAutoDemoTimer(); }
+                    } else { // Hoofdmenu
+                        if (tappedButton0) { isPlayerSelectMode = true; selectedButtonIndex = 0; startAutoDemoTimer(); }
+                        else if (tappedButton1) { exitGame(); stopAutoDemoTimer(); }
+                    }
                 }
             }
         }
-    } // End for loop over changedTouches
+         if(touchHandledForThisFinger) break; // Process only one relevant touch if multiple land simultaneously
+    }
 }
 
 
@@ -884,20 +893,17 @@ function handleTouchMove(event) {
             if (p1_isDraggingShip && p1_touchIdentifier === touch.identifier && ship1) {
                 const deltaX = touchX - p1_touchStartX;
                 ship1.targetX = p1_shipStartDragX + deltaX;
-                const p1EffectiveWidth = ship1.width + (player1IsDualShipActive ? DUAL_SHIP_OFFSET_X : 0);
-                ship1.targetX = Math.max(0, Math.min(gameCanvas.width - p1EffectiveWidth, ship1.targetX));
+                // Boundary checks for ship1.targetX will be in moveEntities
             } else if (p2_isDraggingShip && p2_touchIdentifier === touch.identifier && ship2) {
                 const deltaX = touchX - p2_touchStartX;
                 ship2.targetX = p2_shipStartDragX + deltaX;
-                const p2EffectiveWidth = ship2.width + (player2IsDualShipActive ? DUAL_SHIP_OFFSET_X : 0);
-                ship2.targetX = Math.max(0, Math.min(gameCanvas.width - p2EffectiveWidth, ship2.targetX));
+                // Boundary checks for ship2.targetX will be in moveEntities
             }
-        } else { // Single player or 2P Alternating
+        } else {
             if (isDraggingShip && ship) {
                 const deltaX = touchX - touchStartX;
                 ship.targetX = shipStartDragX + deltaX;
-                const effectiveWidth = ship.width + (isDualShipActive ? DUAL_SHIP_OFFSET_X : 0);
-                ship.targetX = Math.max(0, Math.min(gameCanvas.width - effectiveWidth, ship.targetX));
+                // Boundary checks for ship.targetX will be in moveEntities
             }
         }
     }
@@ -907,37 +913,40 @@ function handleTouchEnd(event) {
     event.preventDefault();
     if (!gameCanvas) return;
 
+    const now = Date.now();
+    const touchDuration = now - lastTouchTapTime;
+
     for (let i = 0; i < event.changedTouches.length; i++) {
         const touch = event.changedTouches[i];
 
+        let wasDraggingThisTouch = false;
+
         if (isTwoPlayerMode && selectedGameMode === 'coop') {
             if (p1_touchIdentifier === touch.identifier) {
+                if(p1_isDraggingShip) wasDraggingThisTouch = true;
                 p1_isDraggingShip = false;
                 p1_touchIdentifier = null;
             }
             if (p2_touchIdentifier === touch.identifier) {
+                if(p2_isDraggingShip) wasDraggingThisTouch = true;
                 p2_isDraggingShip = false;
                 p2_touchIdentifier = null;
             }
         } else {
+            if(isDraggingShip) wasDraggingThisTouch = true;
             isDraggingShip = false;
         }
 
-        // Easy mode shooting logic: if it was a very short tap (not a drag),
-        // isTouchShootingEasyMode was already toggled in handleTouchStart.
-        // We don't need to do anything extra here for easy mode shooting on touchend itself,
-        // as the state is managed by the tap in handleTouchStart.
-        // The main purpose of checking drag here is to PREVENT a drag from ALSO toggling shooting.
-        const touchDuration = Date.now() - lastTouchTapTime;
-        if (touchDuration > TAP_DURATION_THRESHOLD) { // If it was a drag or long press
-            // If it was a drag, we don't want to toggle easy mode shooting.
-            // The isTouchShootingEasyMode is handled on tap start.
-        }
+        // If easy mode is on, and this touch was NOT a drag, and it was a short tap,
+        // it means the isTouchShootingEasyMode was already toggled in handleTouchStart.
+        // If it WAS a drag, we DON'T want to toggle shooting.
+        // The logic to toggle is in handleTouchStart, handleTouchEnd just resets drag flags.
+        // No specific action for isTouchShootingEasyMode here, its state is set on touchstart.
     }
 }
 
 function handleTouchCancel(event) {
-    handleTouchEnd(event); // Treat cancel the same as end for simplicity
+    handleTouchEnd(event);
 }
 
 
